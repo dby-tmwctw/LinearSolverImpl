@@ -77,60 +77,87 @@ def gauss_map(size_x, size_y=None, sigma_x=5, sigma_y=None):
     return 1/(2*np.pi*sigma_x*sigma_y) * np.exp(-exp_part)
 
 def vectorize(image, shape):
+    # 2-D image matrix to vector
+    # Note that this one stacks rows instead of column
     arr = np.array(image)
     flat_arr = arr.ravel()
     vector = np.array(flat_arr)
     return vector
 
 def devectorize(vector, shape):
+    # Vector to 2-D image
+    # Note that the vector should stack rows instead of column
     arr2 = np.asarray(vector).reshape(shape)
     return arr2
 
-def convmtx(h,n):
-    return linalg.toeplitz(np.hstack([h, np.zeros(n-1)]), np.hstack([h[0], np.zeros(n-1)]))
-
 def plot_figure(image, name):
+    # Plot the given figure with given name
     fig1 = plt.figure()
     plt.imshow(image, cmap='gray')
     plt.title(name)
     plt.show()
 
-def build_conv(psf, n):
-    conv_matrix = np.zeros(n*n, n*n)
-    center = n / 2
+def circshift(array, m, n):
+    # Does circular shift to array
+    # Array is an mxn array
+    result = np.zeros((m, n))
+    for i1 in range(m/2):
+        for j1 in range(n/2):
+            result[i1+(m-m/2), j1+(n-n/2)] = array[i1, j1]
+    for i4 in range(m/2, m):
+        for j4 in range(n/2, n):
+            result[i4-m/2, j4-n/2] = array[i4, j4]
+    for i2 in range(m/2):
+        for j2 in range(n/2, n):
+            result[i2+(m-m/2), j2-n/2] = array[i2, j2]
+    for i3 in range(m/2, m):
+        for j3 in range(n/2):
+            result[i3-m/2, j3+(n-n/2)] = array[i3, j3]
+    return result
+
+def build_conv(psf, n, m):
+    # The shape of image is n*n, and the shape of psf is m*m
+    conv_matrix = np.zeros((n*n, n*n))
+    psf = np.rot90(psf, 2)
+    center = m / 2
     for i in range(0, n*n):
         curr_row = i / n
         curr_col = i % n
-        row_start = max(0, center - curr_row)
-        col_start = max(0, center - curr_col)
-        row_end = min()
+        row_offset_start = 0 - min(curr_row, m / 2)
+        col_offset_start = 0 - min(curr_col, m / 2)
+        row_offset_end = min(n - 1 - curr_row, m / 2)
+        col_offset_end = min(n - 1 - curr_col, m / 2)
+        for j in range(row_offset_start, row_offset_end + 1):
+            for k in range(col_offset_start, col_offset_end + 1):
+                col_index = (curr_row + j) * n + (curr_col + k)
+                psf_row = center + j
+                psf_col = center + k
+                conv_matrix[i, col_index] = psf[psf_row, psf_col]
+    return conv_matrix
 
-# n = 256
-# psf = gauss_map(n, n, 3)
-# convmat = convmtx(psf, 256)
-# rand_x = Image.open('cameraman.tif')
-# rand_x = np.array(rand_V, dtype='float32')
-# shape = rand_x.shape
-# vec_x = vectorize(rand_x, shape)
-# vec_b = convmat.dot(vec_x)
-# rand_b = devectorize(vec_b, shape)
-# plot_figure(rand_b, 'Blurred')
+array = [[11, 12, 13], [21, 22, 23], [31, 32, 33]]
+array = np.array(array)
+vec = vectorize(array, array.shape)
+print(array)
+print(vec)
+print(devectorize(vec, array.shape))
+print(build_conv(array, 3, 3))
 
 
-rand_x = np.random.rand(81)
-rand_x = rand_x * 10
-print(rand_x)
-rand_A = np.random.rand(81, 81)
-# rand_A = sparse.rand(250, 200, density=0.01).A
-rand_b = rand_A.dot(rand_x)
-# noise = np.random.normal(scale=0.01, size=rand_b.shape)
-noise = np.zeros(rand_b.shape)
-noise = noise + 0.1
-rand_b = rand_b
-x_est = fista(rand_A, rand_b)
-# x_est = ista(rand_A, rand_b)
-print(x_est)
-print(diff(rand_x, x_est))
+# rand_x = np.random.rand(81)
+# rand_x = rand_x * 10
+# print(rand_x)
+# rand_A = np.random.rand(81, 81)
+# # rand_A = sparse.rand(250, 200, density=0.01).A
+# rand_b = rand_A.dot(rand_x)
+# # noise = np.random.normal(scale=0.01, size=rand_b.shape)
+# noise = np.zeros(rand_b.shape)
+# noise = noise + 0.1
+# rand_b = rand_b
+# x_est = fista(rand_A, rand_b)
+# # x_est = ista(rand_A, rand_b)
+# print(x_est)
+# print(diff(rand_x, x_est))
 # avg_diff = 0
 # for j in range(25):
 #     rand_x = np.random.rand(200)
@@ -142,31 +169,6 @@ print(diff(rand_x, x_est))
 #     # print(diff(rand_x, x_est))
 #     avg_diff += diff(rand_x, x_est)
 # print(avg_diff / 100)
-
-# import numpy as np
-# from PIL import Image
-#
-# img = Image.open('orig.png').convert('RGBA')
-# arr = np.array(img)
-#
-# # record the original shape
-# shape = arr.shape
-#
-# # make a 1-dimensional view of arr
-# flat_arr = arr.ravel()
-#
-# # convert it to a matrix
-# vector = np.matrix(flat_arr)
-#
-# # do something to the vector
-# vector[:,::10] = 128
-#
-# # reform a numpy array of the original shape
-# arr2 = np.asarray(vector).reshape(shape)
-#
-# # make a PIL image
-# img2 = Image.fromarray(arr2, 'RGBA')
-# img2.show()
 
 '''
 Make the psf the full blurring matrix, and then test image deblurring on this
