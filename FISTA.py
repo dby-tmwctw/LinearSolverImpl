@@ -125,8 +125,8 @@ def build_conv(psf, n, m):
         curr_col = i % n
         row_offset_start = 0 - min(curr_row, m / 2)
         col_offset_start = 0 - min(curr_col, m / 2)
-        row_offset_end = min(n - 1 - curr_row, m / 2)
-        col_offset_end = min(n - 1 - curr_col, m / 2)
+        row_offset_end = min(n - 1 - curr_row, (m / 2) - 1)
+        col_offset_end = min(n - 1 - curr_col, (m / 2) - 1)
         for j in range(row_offset_start, row_offset_end + 1):
             for k in range(col_offset_start, col_offset_end + 1):
                 col_index = (curr_row + j) * n + (curr_col + k)
@@ -135,13 +135,14 @@ def build_conv(psf, n, m):
                 conv_matrix[i, col_index] = psf[psf_row, psf_col]
     return conv_matrix
 
-array = [[11, 12, 13], [21, 22, 23], [31, 32, 33]]
+array = Image.open('./image/64x64.tif')
 array = np.array(array)
 vec = vectorize(array, array.shape)
-print(array)
-print(vec)
-print(devectorize(vec, array.shape))
-print(build_conv(array, 3, 3))
+psf = gauss_map(64, 64, 3)
+conv_mat = build_conv(psf, 64, 64)
+b = conv_mat.dot(vec)
+b = devectorize(b, array.shape)
+plot_figure(b, 'Blurred')
 
 
 # rand_x = np.random.rand(81)
