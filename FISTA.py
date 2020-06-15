@@ -5,9 +5,18 @@ import scipy.linalg as linalg
 from PIL import Image
 import matplotlib.pyplot as plt
 import scipy.sparse as sparse
+from helper import *
+
+'''
+Some constants
+'''
 
 l = 0.0001
 iters = 10000
+
+'''
+Below is the proximal operator of the problems
+'''
 
 def shrink(x, l):
     # x should be a 1xn row vector
@@ -22,10 +31,18 @@ def shrink(x, l):
             assert(x[i] <= 0)
     return x
 
+'''
+Below is the calculation of Lipschitz constant for the problem
+'''
+
 def step_size(A):
     # A should be an nxn matrix
     max_eigan = np.real(max(lin.eigh(A.T.dot(A))[0]))
     return 1 / (2 * max_eigan)
+
+'''
+The main ISTA/FISTA routine
+'''
 
 def fista(A, b):
     s = step_size(A)
@@ -48,6 +65,10 @@ def ista(A, b):
         x_est = shrink(x_est - 2 * t * A.T.dot(A.dot(x_est) - b), l * s)
     return x_est
 
+'''
+Difference measurements
+'''
+
 def diff(x, x_est):
     dim = len(x)
     total_diff = 0
@@ -55,86 +76,11 @@ def diff(x, x_est):
         total_diff += abs(x[i] - x_est[i])
     return total_diff
 
-def gauss_map(size_x, size_y=None, sigma_x=5, sigma_y=None):
-    if size_y == None:
-        size_y = size_x
-    if sigma_y == None:
-        sigma_y = sigma_x
+'''
+Actual Testing
+'''
 
-    assert isinstance(size_x, int)
-    assert isinstance(size_y, int)
-
-    x0 = size_x // 2
-    y0 = size_y // 2
-
-    x = np.arange(0, size_x, dtype=float)
-    y = np.arange(0, size_y, dtype=float)[:,np.newaxis]
-
-    x -= x0
-    y -= y0
-
-    exp_part = x**2/(2*sigma_x**2)+ y**2/(2*sigma_y**2)
-    return 1/(2*np.pi*sigma_x*sigma_y) * np.exp(-exp_part)
-
-def vectorize(image, shape):
-    # 2-D image matrix to vector
-    # Note that this one stacks rows instead of column
-    arr = np.array(image)
-    flat_arr = arr.ravel()
-    vector = np.array(flat_arr)
-    return vector
-
-def devectorize(vector, shape):
-    # Vector to 2-D image
-    # Note that the vector should stack rows instead of column
-    arr2 = np.asarray(vector).reshape(shape)
-    return arr2
-
-def plot_figure(image, name):
-    # Plot the given figure with given name
-    fig1 = plt.figure()
-    plt.imshow(image, cmap='gray')
-    plt.title(name)
-    plt.show()
-
-def circshift(array, m, n):
-    # Does circular shift to array
-    # Array is an mxn array
-    result = np.zeros((m, n))
-    for i1 in range(m/2):
-        for j1 in range(n/2):
-            result[i1+(m-m/2), j1+(n-n/2)] = array[i1, j1]
-    for i4 in range(m/2, m):
-        for j4 in range(n/2, n):
-            result[i4-m/2, j4-n/2] = array[i4, j4]
-    for i2 in range(m/2):
-        for j2 in range(n/2, n):
-            result[i2+(m-m/2), j2-n/2] = array[i2, j2]
-    for i3 in range(m/2, m):
-        for j3 in range(n/2):
-            result[i3-m/2, j3+(n-n/2)] = array[i3, j3]
-    return result
-
-def build_conv(psf, n, m):
-    # The shape of image is n*n, and the shape of psf is m*m
-    conv_matrix = np.zeros((n*n, n*n))
-    psf = np.rot90(psf, 2)
-    center = m / 2
-    for i in range(0, n*n):
-        curr_row = i / n
-        curr_col = i % n
-        row_offset_start = 0 - min(curr_row, m / 2)
-        col_offset_start = 0 - min(curr_col, m / 2)
-        row_offset_end = min(n - 1 - curr_row, (m / 2) - 1)
-        col_offset_end = min(n - 1 - curr_col, (m / 2) - 1)
-        for j in range(row_offset_start, row_offset_end + 1):
-            for k in range(col_offset_start, col_offset_end + 1):
-                col_index = (curr_row + j) * n + (curr_col + k)
-                psf_row = center + j
-                psf_col = center + k
-                conv_matrix[i, col_index] = psf[psf_row, psf_col]
-    return conv_matrix
-
+# Blurring operator testing
 array = Image.open('./image/64x64.tif')
 array = np.array(array)
 vec = vectorize(array, array.shape)
@@ -170,7 +116,3 @@ plot_figure(b, 'Blurred')
 #     # print(diff(rand_x, x_est))
 #     avg_diff += diff(rand_x, x_est)
 # print(avg_diff / 100)
-
-'''
-Make the psf the full blurring matrix, and then test image deblurring on this
-'''
