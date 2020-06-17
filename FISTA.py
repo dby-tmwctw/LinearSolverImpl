@@ -13,8 +13,8 @@ from helper import *
 Some constants
 '''
 
-l = 0.0001
-iters = 1000
+l = 20
+iters = 2000
 
 '''
 Below is the proximal operator of the problems
@@ -39,10 +39,8 @@ def shrink2D(x, l):
         for j in range(shape[1]):
             if (x[i,j] > 0):
                 x[i,j] = max(abs(x[i,j]) - l, 0)
-                assert(x[i,j] >= 0)
             else:
                 x[i,j] = 0 - max(abs(x[i,j]) - l, 0)
-                assert(x[i,j] <= 0)
     return x
 '''
 Below is the calculation of Lipschitz constant for the problem
@@ -103,6 +101,25 @@ def ista2(A, b):
         x_est = shrink2D(x_est - 2 * t * intermediate, l * t)
     return np.real(x_est)
 
+def fista2(A, b):
+    s = step_size_fft(A)
+    x_est = np.zeros(A.shape)
+    y = x_est
+    t = 1.0
+    A = circshift(A, A.shape[0], A.shape[1])
+    for i in range(iters):
+        print(i)
+        intermediate = y - 2 * s * fourier_adjoint(fourier(A, y) - b, A)
+        x_new = shrink2D(intermediate, l * s)
+        # Just testing on fourth root
+        t_new = (1 + math.sqrt(math.sqrt(1 + 4 * t * t))) / 2
+        y = x_new + ((t-1)/(t_new))*(x_new - x_est)
+        t = t_new
+        x_est = x_new
+        if (i % 100 == 0):
+            print(x_est)
+    return np.real(x_est)
+
 '''
 Difference measurements
 '''
@@ -124,7 +141,7 @@ array = np.array(array)
 psf = gauss_map(256, 256, 3)
 b = fourier(circshift(psf, 256, 256), array)
 plot_figure(b, 'Blurred')
-x_est = ista2(psf, b)
+x_est = fista2(psf, b)
 print(x_est)
 print(x_est.shape)
 plot_figure(x_est, 'Recovered')
