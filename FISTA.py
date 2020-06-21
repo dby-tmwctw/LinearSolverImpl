@@ -120,8 +120,8 @@ def fista2(A, b):
     for i in range(iters):
         print(i)
         intermediate = y - 2 * s * fourier_adjoint(fourier(A, y) - b, A)
-        x_new = shrink2D(intermediate, 10 * s)
-        x_new = shrink2norm(x_new, l * s)
+        x_new = shrink2norm(intermediate, 100 * s)
+        # x_new = shrink2norm(x_new, l * s)
         # Just testing on fourth root
         t_new = (1 + math.sqrt(math.sqrt(1 + 4 * t * t))) / 2
         y = x_new + ((t-1)/(t_new))*(x_new - x_est)
