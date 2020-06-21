@@ -13,7 +13,7 @@ from helper import *
 Some constants
 '''
 
-l = 20
+l = 100
 iters = 2000
 
 '''
@@ -42,6 +42,16 @@ def shrink2D(x, l):
             else:
                 x[i,j] = 0 - max(abs(x[i,j]) - l, 0)
     return x
+
+def shrink2norm(x, l):
+    shape = x.shape
+    norm = lin.norm(x)
+    constant = (1 - (l / norm))
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            x[i, j] = constant * x[i, j]
+    return x
+
 '''
 Below is the calculation of Lipschitz constant for the problem
 '''
@@ -110,7 +120,8 @@ def fista2(A, b):
     for i in range(iters):
         print(i)
         intermediate = y - 2 * s * fourier_adjoint(fourier(A, y) - b, A)
-        x_new = shrink2D(intermediate, l * s)
+        x_new = shrink2D(intermediate, 10 * s)
+        x_new = shrink2norm(x_new, l * s)
         # Just testing on fourth root
         t_new = (1 + math.sqrt(math.sqrt(1 + 4 * t * t))) / 2
         y = x_new + ((t-1)/(t_new))*(x_new - x_est)
