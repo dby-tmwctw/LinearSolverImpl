@@ -14,7 +14,12 @@ Some constants
 '''
 
 l = 100
-iters = 2000
+iters = 20
+mu = 4
+ld = 10
+
+def r_calc(atb, z, v):
+    return atb + (mu * z) - (v / mu)
 
 '''
 Below is the proximal operator of the problems
@@ -102,6 +107,18 @@ def ista(A, b):
         x_est = shrink(x_est - 2 * t * A.T.dot(A.dot(x_est) - b), l * s)
     return x_est
 
+def ADMM(A, b):
+    ata = A.T.dot(A)
+    inv = lin.inv(ata + mu * np.identity(ata.shape[0]))
+    z = np.zeros(len(b))
+    x = np.zeros(len(b))
+    v = np.zeros(len(b))
+    for i in range(iters):
+        z = shrink(x + v / mu, ld / mu)
+        x = inv.dot(A.T.dot(b) + mu * z - v / mu)
+        v = v + mu * (x - z)
+    return x
+
 def ista2(A, b):
     t = step_size_fft(A)
     x_est = np.zeros(A.shape)
@@ -119,8 +136,8 @@ def fista2(A, b):
     A = circshift(A, A.shape[0], A.shape[1])
     for i in range(iters):
         print(i)
-        intermediate = y - 2 * s * fourier_adjoint(fourier(A, y) - b, A)
-        x_new = shrink2norm(intermediate, 100 * s)
+        intermediate = y - 2 * s * (fourier_adjoint(fourier(A, y) - b, A) + 0.01 * y)
+        x_new = shrink2D(intermediate, 20 * s)
         # x_new = shrink2norm(x_new, l * s)
         # Just testing on fourth root
         t_new = (1 + math.sqrt(math.sqrt(1 + 4 * t * t))) / 2
@@ -130,6 +147,26 @@ def fista2(A, b):
         if (i % 100 == 0):
             print(x_est)
     return np.real(x_est)
+
+def ADMM2(A, b):
+    # A_fft = fft.fft2(fft.ifftshift(A))
+    # inv = 1. / (ata + mu)
+    # atb = np.real(fft.fftshift(fft.ifft2(fft.ifftshift(b) * np.conj(A_fft))))
+    A = circshift(A, A.shape[0], A.shape[1])
+    A_fft = fft.fft2(A)
+    ata = np.abs(np.conj(A_fft) * A_fft)
+    inv = 1. / (ata + mu)
+    atb = fourier_adjoint(b, A)
+    z = np.zeros(b.shape)
+    x = np.zeros(b.shape)
+    v = np.zeros(b.shape)
+    for i in range(iters):
+        z = shrink2D(x + v / mu, ld / mu)
+        # fftspace = inv * fft.fft2(fft.ifftshift(r_calc(atb, z, v)))
+        # x = np.real(fft.fftshift(fft.ifft2(fftspace)))
+        x = np.real(fft.ifft2(inv * fft.fft2(atb + mu * z - v / mu)))
+        v = v + mu * (x - z)
+    return np.real(x)
 
 '''
 Difference measurements
@@ -152,10 +189,21 @@ array = np.array(array)
 psf = gauss_map(256, 256, 3)
 b = fourier(circshift(psf, 256, 256), array)
 plot_figure(b, 'Blurred')
-x_est = fista2(psf, b)
+x_est = ADMM2(psf, b)
 print(x_est)
 print(x_est.shape)
 plot_figure(x_est, 'Recovered')
+
+# array = Image.open('./image/64x64.tif')
+# array = np.array(array)
+# psf = gauss_map(64, 64, 3)
+# A = build_conv(psf, 64, 64)
+# b = A.dot(vectorize(array, array.shape))
+# plot_figure(devectorize(b, array.shape), 'Blurred')
+# x_est = fista(A, b)
+# print(x_est)
+# print(x_est.shape)
+# plot_figure(devectorize(x_est, array.shape), 'Recovered')
 
 
 # rand_x = np.random.rand(81)
@@ -170,6 +218,7 @@ plot_figure(x_est, 'Recovered')
 # rand_b = rand_b
 # x_est = fista(rand_A, rand_b)
 # # x_est = ista(rand_A, rand_b)
+# x_est = ADMM(rand_A, rand_b)
 # print(x_est)
 # print(diff(rand_x, x_est))
 # avg_diff = 0
