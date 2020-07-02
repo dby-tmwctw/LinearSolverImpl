@@ -13,13 +13,34 @@ from helper import *
 Some constants
 '''
 
-l = 100
-iters = 20
-mu = 4
-ld = 10
+l = 10
+iters = 500
+mu = 1
+ld = 1
+rho = 0.9
 
 def r_calc(atb, z, v):
     return atb + (mu * z) - (v / mu)
+
+def TV1D(x):
+    # Reflective boundary condition
+    x_roll = np.roll(x, 1)
+    x_roll[0] = x[0]
+    return lin.norm(x_roll - x)
+
+def TV2D(x):
+    # Reflective boundary condition
+    x_row = np.roll(x, 1, axis=0)
+    x_col = np.roll(x, 1, axis=1)
+    x_row[0] = x[0]
+    x_col[:, 0] = x[:, 0]
+    return np.sum(np.sqrt((x_row - x) ** 2 + (x_col - x) ** 2))
+
+def difference(A, x, b):
+    return 0.5 * lin.norm(A.dot(x) - b)
+
+def difference2(A, x, b):
+    return 0.5 * lin.norm(fourier(A, x) - b)
 
 '''
 Below is the proximal operator of the problems
@@ -91,6 +112,8 @@ def fista(A, b):
     x_est = np.zeros(A.shape[1])
     y = x_est
     t = 1.0
+    iter = []
+    val = []
     for i in range(iters):
         shrink_val = y - 2 * s * A.T.dot((A.dot(y)  - b))
         x_new = shrink(shrink_val, l * s)
@@ -98,7 +121,9 @@ def fista(A, b):
         y = x_new + ((t-1)/(t_new))*(x_new - x_est)
         t = t_new
         x_est = x_new
-    return x_est
+        iter.append(i)
+        val.append(difference(A, x_est, b))
+    return x_est, iter, val
 
 def ista(A, b):
     t = step_size(A)
@@ -119,6 +144,28 @@ def ADMM(A, b):
         v = v + mu * (x - z)
     return x
 
+def safista(A, b):
+    s = step_size(A)
+    x_est = np.zeros(A.shape[1])
+    y = x_est
+    t = 1.0
+    q = 2
+    lmbd = np.max(A.T.dot(b))
+    iter = []
+    val = []
+    for i in range(iters):
+        shrink_val = y - 2 * s * A.T.dot((A.dot(y)  - b))
+        x_new = shrink(shrink_val, lmbd * s)
+        t_new = (1 + math.sqrt(1 + 4 * t * t)) / 2
+        y = x_new + ((t-1)/(t_new))*(x_new - x_est)
+        t = t_new
+        R = (TV1D(x_est) / TV1D(x_new)) ** q
+        lmbd = R * rho * lmbd
+        x_est = x_new
+        iter.append(i)
+        val.append(difference(A, x_est, b))
+    return x_est, iter, val
+
 def ista2(A, b):
     t = step_size_fft(A)
     x_est = np.zeros(A.shape)
@@ -135,11 +182,8 @@ def fista2(A, b):
     t = 1.0
     A = circshift(A, A.shape[0], A.shape[1])
     for i in range(iters):
-        print(i)
         intermediate = y - 2 * s * (fourier_adjoint(fourier(A, y) - b, A) + 0.01 * y)
         x_new = shrink2D(intermediate, 20 * s)
-        # x_new = shrink2norm(x_new, l * s)
-        # Just testing on fourth root
         t_new = (1 + math.sqrt(math.sqrt(1 + 4 * t * t))) / 2
         y = x_new + ((t-1)/(t_new))*(x_new - x_est)
         t = t_new
@@ -149,9 +193,6 @@ def fista2(A, b):
     return np.real(x_est)
 
 def ADMM2(A, b):
-    # A_fft = fft.fft2(fft.ifftshift(A))
-    # inv = 1. / (ata + mu)
-    # atb = np.real(fft.fftshift(fft.ifft2(fft.ifftshift(b) * np.conj(A_fft))))
     A = circshift(A, A.shape[0], A.shape[1])
     A_fft = fft.fft2(A)
     ata = np.abs(np.conj(A_fft) * A_fft)
@@ -162,11 +203,51 @@ def ADMM2(A, b):
     v = np.zeros(b.shape)
     for i in range(iters):
         z = shrink2D(x + v / mu, ld / mu)
-        # fftspace = inv * fft.fft2(fft.ifftshift(r_calc(atb, z, v)))
-        # x = np.real(fft.fftshift(fft.ifft2(fftspace)))
         x = np.real(fft.ifft2(inv * fft.fft2(atb + mu * z - v / mu)))
         v = v + mu * (x - z)
     return np.real(x)
+
+def fista2sansTK(A, b):
+    s = step_size_fft(A)
+    x_est = np.zeros(A.shape)
+    y = x_est
+    t = 1.0
+    A = circshift(A, A.shape[0], A.shape[1])
+    iter = []
+    val = []
+    for i in range(iters):
+        intermediate = y - 2 * s * (fourier_adjoint(fourier(A, y) - b, A))
+        x_new = shrink2D(intermediate, 20 * s)
+        t_new = (1 + math.sqrt(math.sqrt(1 + 4 * t * t))) / 2
+        y = x_new + ((t-1)/(t_new))*(x_new - x_est)
+        t = t_new
+        x_est = x_new
+        iter.append(i)
+        val.append(difference2(A, x_est, b))
+    return np.real(x_est), iter, val
+
+def safista2(A, b):
+    s = step_size_fft(A)
+    x_est = np.zeros(A.shape)
+    y = x_est
+    t = 1.0
+    A = circshift(A, A.shape[0], A.shape[1])
+    lmbd = np.max(fourier_adjoint(b, A))
+    q = 1
+    iter = []
+    val = []
+    for i in range(iters):
+        intermediate = y - 2 * s * (fourier_adjoint(fourier(A, y) - b, A))
+        x_new = shrink2D(intermediate, lmbd * s)
+        t_new = (1 + math.sqrt(math.sqrt(1 + 4 * t * t))) / 2
+        y = x_new + ((t-1)/(t_new))*(x_new - x_est)
+        t = t_new
+        R = (TV2D(x_est) / TV2D(x_new)) ** q
+        lmbd = R * rho * lmbd
+        x_est = x_new
+        iter.append(i)
+        val.append(difference2(A, x_est, b))
+    return np.real(x_est), iter, val
 
 '''
 Difference measurements
@@ -189,10 +270,22 @@ array = np.array(array)
 psf = gauss_map(256, 256, 3)
 b = fourier(circshift(psf, 256, 256), array)
 plot_figure(b, 'Blurred')
-x_est = ADMM2(psf, b)
-print(x_est)
-print(x_est.shape)
-plot_figure(x_est, 'Recovered')
+x_est1, iter1, val1 = fista2sansTK(psf, b)
+x_est2, iter2, val2 = safista2(psf, b)
+iter1.pop(0)
+val1.pop(0)
+iter2.pop(0)
+val2.pop(0)
+plt.plot(iter1, val1, label='fista2sansTK')
+plt.plot(iter2, val2, label='safista2')
+plt.legend()
+plt.show()
+print(x_est1)
+print(x_est1.shape)
+print(x_est2)
+print(x_est2.shape)
+plot_figure(x_est1, 'Recovered1')
+plot_figure(x_est2, 'Recovered2')
 
 # array = Image.open('./image/64x64.tif')
 # array = np.array(array)
@@ -216,7 +309,16 @@ plot_figure(x_est, 'Recovered')
 # noise = np.zeros(rand_b.shape)
 # noise = noise + 0.1
 # rand_b = rand_b
-# x_est = fista(rand_A, rand_b)
+# x_est1, iter1, val1 = fista(rand_A, rand_b)
+# x_est2, iter2, val2 = safista(rand_A, rand_b)
+# iter1.pop(0)
+# val1.pop(0)
+# iter2.pop(0)
+# val2.pop(0)
+# plt.plot(iter1, val1, label='fista')
+# plt.plot(iter2, val2, label='safista')
+# plt.legend()
+# plt.show()
 # # x_est = ista(rand_A, rand_b)
 # x_est = ADMM(rand_A, rand_b)
 # print(x_est)
