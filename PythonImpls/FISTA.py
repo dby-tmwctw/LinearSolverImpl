@@ -265,7 +265,7 @@ Actual Testing
 '''
 
 # Blurring operator testing
-array = Image.open('./image/cameraman.tif')
+array = Image.open('../image/cameraman.tif')
 array = np.array(array)
 psf = gauss_map(256, 256, 3)
 b = fourier(circshift(psf, 256, 256), array)
@@ -287,7 +287,7 @@ print(x_est2.shape)
 plot_figure(x_est1, 'Recovered1')
 plot_figure(x_est2, 'Recovered2')
 
-# array = Image.open('./image/64x64.tif')
+# array = Image.open('../image/64x64.tif')
 # array = np.array(array)
 # psf = gauss_map(64, 64, 3)
 # A = build_conv(psf, 64, 64)
