@@ -122,6 +122,8 @@ void ista(cublasHandle_t handle, cusolverDnHandle_t cusolverH, int m, int n, flo
         shrink<<<1, n>>>(n, x_est, l * step);
         cudaDeviceSynchronize();
     }
+    cudaFree(result);
+    cudaFree(temp);
 }
 
 int main(void)
