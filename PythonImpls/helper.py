@@ -121,3 +121,10 @@ def plot_figure(image, name):
     plt.imshow(image, cmap='gray')
     plt.title(name)
     plt.show()
+
+def generate_blurring_png(name, width, height, sigma):
+    psf = gauss_map(width, height, sigma)
+    psf = psf * 150000
+    psf = psf.astype(np.uint8)
+    im = Image.fromarray(psf)
+    im.save(name)
