@@ -124,7 +124,7 @@ def plot_figure(image, name):
 
 def generate_blurring_png(name, width, height, sigma):
     psf = gauss_map(width, height, sigma)
-    psf = psf * 150000
+    psf = psf * 1500 * sigma * sigma
     psf = psf.astype(np.uint8)
     im = Image.fromarray(psf)
     im.save(name)
