@@ -8,10 +8,11 @@
 #include <png.h>
 #include <cufft.h>
 #include <cuda_runtime.h>
+#include <unistd.h>
 #define IDX2C(i,j,ld) (((j)*(ld))+(i))
 
 const int adjust_coefficient = 3;
-const int num_iters = 100;
+const int num_iters = 8000;
 
 __global__
 void copy_array(int n, int m, float* x, float* y)
@@ -262,20 +263,20 @@ void multiply_kernel_additional(int m, int n, float2* x, float2 *y, float2 *z, f
     }
 }
 
-// __global__
-// void normalize(int m, int n, float2* x)
-// {
-//     int row = blockIdx.x * blockDim.x + threadIdx.x;
-//     int col = blockIdx.y * blockDim.y + threadIdx.y;
-//     for (int i = row; i < m; i += (gridDim.x * blockDim.x))
-//     {
-//         for (int j = col; j < n; j += (gridDim.y * blockDim.y))
-//         {
-//             x[i*m+j].x = x[i*m+j].x / (1500 * adjust_coefficient * adjust_coefficient);
-//             x[i*m+j].y = x[i*m+j].y / (1500 * adjust_coefficient * adjust_coefficient);
-//         }
-//     }
-// }
+__global__
+void normalize(int m, int n, float2* x)
+{
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    for (int i = row; i < m; i += (gridDim.x * blockDim.x))
+    {
+        for (int j = col; j < n; j += (gridDim.y * blockDim.y))
+        {
+            x[i*n+j].x = x[i*n+j].x / (m * n);
+            x[i*n+j].y = x[i*n+j].y / (m * n);
+        }
+    }
+}
 
 __global__
 void reduce(float2 *input, float2 *output)
@@ -441,7 +442,7 @@ void write_back_image(int m, int n, png_bytep *new_image, float2 *signal)
         for (int j = 0; j < n; j++)
         {
             new_image[i][j] = (png_byte)fminf(fabsf(signal[i*n+j].x), 255.0);
-            printf("%d\n", new_image[i][j]);
+            if (i == m / 2) printf("%d ", new_image[i][j]);
         }
     }
 }
@@ -456,8 +457,8 @@ void fourier(cufftHandle plan, int m, int n, float2 *signal, float2 *filter_shif
     cufftExecC2C(plan, signal, signal, CUFFT_INVERSE);
     cufftExecC2C(plan, filter_shifted, filter_shifted, CUFFT_INVERSE);
     cudaDeviceSynchronize();
-    // normalize<<<numBlocks, threads>>>(m, n, signal);
-    // cudaDeviceSynchronize();
+    normalize<<<numBlocks, threads>>>(m, n, filter_shifted);
+    cudaDeviceSynchronize();
 }
 
 float step_size(cublasHandle_t handle, cusolverDnHandle_t cusolverH, int m, int n, float *A)
@@ -616,24 +617,34 @@ int main(void)
     cufftHandle plan;
     cufftPlan2d(&plan, image_info[0], image_info[1], CUFFT_C2C);
     // Now blur the image
-    printf("Step 0:\n");
-    for (int j = 0; j < 8; j++)
-    {
-        for (int k = 0; k < 8; k++)
-        {
-            float real = signal[j*8+k].x;
-            printf("%f ", real);
-        }
-        printf("\n");
-    }
+    // printf("Step 0:\n");
+    // for (int j = 0; j < 8; j++)
+    // {
+    //     for (int k = 0; k < 8; k++)
+    //     {
+    //         float real = filter_shifted[j*8+k].x;
+    //         printf("%f ", real);
+    //     }
+    //     printf("\n");
+    // }
+    // printf("-----------------------------\n");
     fourier(plan, image_info[1], image_info[0], signal, filter_shifted, numBlocks, threads);
     // fourier(plan, image_info[1], image_info[0], signal, filter_reversed, numBlocks, threads);
+    // for (int j = 0; j < 8; j++)
+    // {
+    //     for (int k = 0; k < 8; k++)
+    //     {
+    //         float real = filter_shifted[j*8+k].x;
+    //         printf("%f ", real);
+    //     }
+    //     printf("\n");
+    // }
     // Copy the image back
     new_image = (png_bytep*) malloc(image_info[1] * sizeof(png_bytep));
     for (int i = 0; i < image_info[1]; i++) new_image[i] = (png_bytep) malloc(image_info[0] * sizeof(png_byte));
-    // write_back_image(image_info[1], image_info[0], new_image, signal);
-    // cudaDeviceSynchronize();
-    // write_image("../test/blurred/blurred3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
+    write_back_image(image_info[1], image_info[0], new_image, signal);
+    cudaDeviceSynchronize();
+    write_image("../test/blurred/blurred3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
     // Ieigs = fft.fft2(circshift(psf, psf.shape[0], psf.shape[1]))
     // Ieigs2 = Ieigs ** 2
     // step = 1 / (2 * np.amax(Ieigs2))
@@ -648,10 +659,11 @@ int main(void)
     collapseAns<<<1, numBlocks1>>>(output);
     cudaDeviceSynchronize();
     float2 maxComplex = ComplexMul(output[0], output[0]);
-    float max_value = maxComplex.x / (image_info[0] * image_info[1]);
-    max_value = max_value / (image_info[0] * image_info[1]);
+    float max_value = maxComplex.x;
     float step = 1 / (2 * max_value);
     cufftExecC2C(plan, filter_shifted, filter_shifted, CUFFT_INVERSE);
+    normalize<<<numBlocks, threads>>>(image_info[1], image_info[0], filter_shifted);
+    cudaDeviceSynchronize();
     cudaFree(output);
     printf("%f %f\n", max_value, step);
     // for i in range(iters):
@@ -663,73 +675,25 @@ int main(void)
     cudaMallocManaged(reinterpret_cast<void **>(&x_est), size);
     cudaMallocManaged(reinterpret_cast<void **>(&temp), size);
     cudaMemset(reinterpret_cast<void **>(&x_est), 0, size);
-    for (int i = 0; i < 2; i++)
+    // Try many many fourier transforms
+    // Try do one transform for filter and get it back only after everything is finished
+    for (int i = 0; i < num_iters; i++)
     {
         printf("Now doing iteration %d\n", i);
         matrix_copy<<<numBlocks, threads>>>(image_info[1], image_info[0], temp, x_est);
         cudaDeviceSynchronize();
-        printf("Step 1:\n");
-        for (int j = 0; j < 8; j++)
-        {
-            for (int k = 0; k < 8; k++)
-            {
-                float real = x_est[j*8+k].x;
-                printf("%f ", real);
-            }
-            printf("\n");
-        }
         fourier(plan, image_info[1], image_info[0], x_est, filter_shifted, numBlocks, threads);
-        printf("Step 1.5:\n");
-        for (int j = 0; j < 8; j++)
-        {
-            for (int k = 0; k < 8; k++)
-            {
-                float real = x_est[j*8+k].x;
-                printf("%f ", real);
-            }
-            printf("\n");
-        }
         matrix_minus<<<numBlocks, threads>>>(image_info[1], image_info[0], x_est, signal);
         cudaDeviceSynchronize();
-        printf("Step 2:\n");
-        for (int j = 0; j < 8; j++)
-        {
-            for (int k = 0; k < 8; k++)
-            {
-                float real = x_est[j*8+k].x;
-                printf("%f ", real);
-            }
-            printf("\n");
-        }
         fourier(plan, image_info[1], image_info[0], x_est, filter_reversed, numBlocks, threads);
         modify<<<numBlocks, threads>>>(image_info[1], image_info[0], x_est, temp, step);
         cudaDeviceSynchronize();
-        printf("Before:\n");
-        for (int j = 0; j < 8; j++)
-        {
-            for (int k = 0; k < 8; k++)
-            {
-                float real = x_est[j*8+k].x;
-                printf("%f ", real);
-            }
-            printf("\n");
-        }
-        shrink2D<<<numBlocks, threads>>>(image_info[1], image_info[0], x_est, 25);
+        shrink2D<<<numBlocks, threads>>>(image_info[1], image_info[0], x_est, 10 * step);
         cudaDeviceSynchronize();
-        printf("After:\n");
-        for (int j = 0; j < 8; j++)
-        {
-            for (int k = 0; k < 8; k++)
-            {
-                float real = x_est[j*8+k].x;
-                printf("%f ", real);
-            }
-            printf("\n");
-        }
     }
-    // write_back_image(image_info[1], image_info[0], new_image, x_est);
-    // cudaDeviceSynchronize();
-    // write_image("../test/recovered/recovered3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
+    write_back_image(image_info[1], image_info[0], new_image, x_est);
+    cudaDeviceSynchronize();
+    write_image("../test/recovered/recovered3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
     free_image(image, image_info, other1);
     free_image(psf, psf_info, other2);
     cudaFree(signal);
