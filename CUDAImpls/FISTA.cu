@@ -122,15 +122,15 @@ static __device__ __host__ inline float2 ComplexSquareMax(float2 a, float2 b) {
 }
 
 __global__
-void multiply_kernel(int n, int m, float2* x, float2* y, float scale)
+void multiply_kernel(int m, int n, float2* x, float2* y, float scale)
 {
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     int col = blockIdx.y * blockDim.y + threadIdx.y;
-    for (int i = row; i < n; i += (gridDim.x * blockDim.x))
+    for (int i = row; i < m; i += (gridDim.x * blockDim.x))
     {
-        for (int j = col; j < m; j += (gridDim.y * blockDim.y))
+        for (int j = col; j < n; j += (gridDim.y * blockDim.y))
         {
-            x[i*m+j] = ComplexScale(ComplexMul(x[i*m+j], y[i*m+j]), scale);
+            x[i*n+j] = ComplexScale(ComplexMul(x[i*n+j], y[i*n+j]), scale);
         }
     }
 }
