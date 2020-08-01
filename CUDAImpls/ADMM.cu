@@ -13,8 +13,11 @@
 // Convention: Scalar arguments always at the very end
 // Convention: All arrays are of size mxn
 
+// When psf is created, it is normalized so a png image can be constructed. Hence this is to adjust back the psf
 const int adjust_coefficient = 3;
+// Number of iterations
 const int num_iters = 12;
+// Some constants for the algorithm
 const float mu1 = 1e-6;
 const float mu2 = 1e-5;
 const float mu3 = 4e-5;
@@ -721,6 +724,33 @@ void write_image(const char *name, png_bytep *image, int width, int height, png_
     fclose(fp);
 }
 
+void write_test_result(int numTests, double *record, char *filename)
+{
+    printf("Creating %s.csv file\n",filename);
+    FILE *fp;
+
+    // printf("Creating filename\n");
+
+    // filename = strcat(filename, ".csv");
+    // filename = strcat("../test/CUDA_Result/", filename);
+
+    printf("Creating file pointer\n");
+    fp = fopen(filename,"w+");
+
+    fprintf(fp,"Num_Iterations, Time(s)\n");
+
+    printf("Starting to write actual file\n");
+
+    for(int i = 0; i < numTests; i++)
+    {
+        fprintf(fp, "%d,%.10g\n", i+1, record[i]);
+    }
+
+    fclose(fp);
+
+    printf("%s.csv file created\n",filename);
+}
+
 void copy_image(int m, int n, float **image, float **psf, float2 *signal, float2 *filter)
 {
     for (int i = 0; i < m; i++)
@@ -831,8 +861,6 @@ void load_and_pad(int *image_info, int *psf_info, png_bytep other1, png_bytep ot
     cudaMemset(reinterpret_cast<void **>(pad_signal), 0, pad_size);
     cudaMemset(reinterpret_cast<void **>(pad_filter), 0, pad_size);
     cudaDeviceSynchronize();
-    // // Used for fourier adjoint
-    // cudaMallocManaged(reinterpret_cast<void **>(&filter_reversed), size);
     // Copy the image over, do the conversion from real to complex at the same time
     copy_image(image_info[1], image_info[0], image, psf, signal, filter);
     cudaDeviceSynchronize();
@@ -845,7 +873,6 @@ void load_and_pad(int *image_info, int *psf_info, png_bytep other1, png_bytep ot
     cufftPlan2d(&plan, image_info[0], image_info[1], CUFFT_C2C);
     // Pre-transform the two filters
     cufftExecC2C(plan, filter_shifted, filter_shifted, CUFFT_FORWARD);
-    // cufftExecC2C(plan, filter_reversed, filter_reversed, CUFFT_FORWARD);
     // Now blur the image
     fourier(plan, image_info[1], image_info[0], signal, filter_shifted, numBlocks, threads);
     matrix_pad<<<numBlocks, threads>>>(height, width, signal, *pad_signal);
@@ -859,9 +886,7 @@ void load_and_pad(int *image_info, int *psf_info, png_bytep other1, png_bytep ot
     cufftDestroy(plan);
 }
 
-// Padding needed: psf, blurred image, image of all ones
-
-int main(void)
+double* run_admm_image(int numIters)
 {
     png_bytep *new_image;
     // Variables used in algorithm
@@ -900,8 +925,6 @@ int main(void)
     cudaMallocManaged(reinterpret_cast<void **>(&r_calc), pad_size);
     cudaMallocManaged(reinterpret_cast<void **>(&draft1), pad_size);
     cudaMallocManaged(reinterpret_cast<void **>(&draft2), pad_size);
-    // cudaMallocManaged(reinterpret_cast<void **>(&pad_signal), pad_size);
-    // cudaMallocManaged(reinterpret_cast<void **>(&pad_filter), pad_size);
     // Shifted psf
     cudaMallocManaged(reinterpret_cast<void **>(&filter_shifted), pad_size);
     // Used for fourier adjoint
@@ -918,8 +941,6 @@ int main(void)
     cudaMemset(reinterpret_cast<void **>(&r_calc), 0, pad_size);
     cudaMemset(reinterpret_cast<void **>(&draft1), 0, pad_size);
     cudaMemset(reinterpret_cast<void **>(&draft2), 0, pad_size);
-    // cudaMemset(reinterpret_cast<void **>(&pad_signal), 0, pad_size);
-    // cudaMemset(reinterpret_cast<void **>(&pad_filter), 0, pad_size);
     cudaDeviceSynchronize();
     printf("Finished setting memory\n");
     dim3 threads(16, 16);
@@ -935,14 +956,6 @@ int main(void)
     // Pre-transform the two filters
     cufftExecC2C(plan, filter_shifted, filter_shifted, CUFFT_FORWARD);
     cufftExecC2C(plan, filter_reversed, filter_reversed, CUFFT_FORWARD);
-    // printSlice(pad_height, pad_width, pad_signal, height / 2, "pad_signal_original");
-    // // Now blur the image
-    // fourier(plan, pad_height, pad_width, pad_signal, filter_shifted, numBlocks, threads);
-    // printSlice(pad_height, pad_width, pad_signal, height / 2, "pad_signal_prev");
-    // // Need restoration because the nomralization coefficient isn't right when scaled
-    // clear_padding_and_restore<<<numBlocks, threads>>>(pad_height, pad_width, pad_signal);
-    // cudaDeviceSynchronize();
-    // printSlice(pad_height, pad_width, pad_signal, height / 2, "pad_signal_after");
     // Copy the image back
     new_image = (png_bytep*) malloc(image_info[1] * sizeof(png_bytep));
     for (int i = 0; i < image_info[1]; i++) new_image[i] = (png_bytep) malloc(image_info[0] * sizeof(png_byte));
@@ -975,10 +988,12 @@ int main(void)
     compute_V_divmat<<<numBlocks, threads>>>(pad_height, pad_width, filter_shifted, psiTpsi, V_divmat);
     cudaDeviceSynchronize();
     // printSlice(pad_height, pad_width, V_divmat, height / 2, "V_divmat");
+    double *record = (double *) malloc(numIters * sizeof(double));
+    auto runStart = std::chrono::system_clock::now();
     // ADMM iterations starts here
-    for (int i = 0; i < num_iters; i++)
+    for (int i = 0; i < numIters; i++)
     {
-        printf("Iteration %d\n", i);
+        // printf("Iteration %d\n", i);
         // U-update
         // Here, as we just calculated psi_V, there is no need to calculate that again
         U_update<<<numBlocks, threads>>>(pad_height, pad_width, psi_V, eta, U);
@@ -1029,8 +1044,50 @@ int main(void)
         Rho_update<<<numBlocks, threads>>>(pad_height, pad_width, V, W, rho);
         cudaDeviceSynchronize();
         // printSliceScientific(pad_height, pad_width, rho, height, "rho");
+        auto currEnd = std::chrono::system_clock::now();
+        std::chrono::duration<double> currDuration = currEnd - runStart;
+        record[i] = currDuration.count();
     }
     write_back_image_padded(image_info[1], image_info[0], new_image, V);
     cudaDeviceSynchronize();
     write_image("../test/recovered/ADMM_recovered3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
+    cudaFree(X);
+    cudaFree(U);
+    cudaFree(V);
+    cudaFree(W);
+    cudaFree(xi);
+    cudaFree(eta);
+    cudaFree(rho);
+    cudaFree(r_calc);
+    cudaFree(draft1);
+    cudaFree(draft2);
+    cudaFree(pad_signal);
+    cudaFree(pad_filter);
+    cudaFree(X_divmat);
+    cudaFree(V_divmat);
+    cudaFree(psiTpsi);
+    cudaFree(psi_V);
+    free(image_info);
+    free(psf_info);
+    free(other1);
+    free(other2);
+    free(new_image);
+    cufftDestroy(plan);
+    return record;
+}
+
+// Padding needed: psf, blurred image, image of all ones
+
+int main(void)
+{
+    int numTests = 200;
+    double *record = run_admm_image(numTests);
+    // for (int i = 0; i < numTests; i++)
+    // {
+    //     printf("Test %d\n", i + 1);
+    //     record[i] = run_ista_image(i+1);
+    // }
+    char *filename = "../test/CUDA_Result/ADMM_0_200_single.csv";
+    write_test_result(numTests, record, filename);
+    free(record);
 }

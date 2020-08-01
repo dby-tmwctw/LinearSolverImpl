@@ -168,6 +168,7 @@ void matrix_copy(int m, int n, float2* x, float2* y)
 __global__
 void modify(int m, int n, float2 *x, float2 *y, float step)
 {
+    // x = y - 2 * s * x
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     int col = blockIdx.y * blockDim.y + threadIdx.y;
     for (int i = row; i < m; i += (gridDim.x * blockDim.x))
@@ -175,6 +176,21 @@ void modify(int m, int n, float2 *x, float2 *y, float step)
         for (int j = col; j < n; j += (gridDim.y * blockDim.y))
         {
             x[i*n+j] = ComplexSub(y[i*n+j], ComplexScale(x[i*n+j], 2 * step));
+        }
+    }
+}
+
+__global__
+void modify_fista(int m, int n, float2 *x, float2 *y, float step)
+{
+    // x = y - 2 * s * x
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    for (int i = row; i < m; i += (gridDim.x * blockDim.x))
+    {
+        for (int j = col; j < n; j += (gridDim.y * blockDim.y))
+        {
+            x[i*n+j] = ComplexSub(y[i*n+j], ComplexScale(ComplexAdd(x[i*n+j], ComplexScale(y[i*n+j], 0.01)), 2 * step));
         }
     }
 }
@@ -189,6 +205,29 @@ void shrink2D(int m, int n, float2 *x, float l)
         for (int j = col; j < n; j += (gridDim.y * blockDim.y))
         {
             float real = x[i*n+j].x;
+            if (real > 0)
+            {
+                x[i*n+j].x = fmaxf(fabsf(real) - l, 0);
+                x[i*n+j].y = 0.0f;
+            } else
+            {
+                x[i*n+j].x = 0 - fmaxf(fabsf(real) - l, 0);
+                x[i*n+j].y = 0.0f;
+            }
+        }
+    }
+}
+
+__global__
+void shrink2D_copy(int m, int n, float2 *y, float2 *x, float l)
+{
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    for (int i = row; i < m; i += (gridDim.x * blockDim.x))
+    {
+        for (int j = col; j < n; j += (gridDim.y * blockDim.y))
+        {
+            float real = y[i*n+j].x;
             if (real > 0)
             {
                 x[i*n+j].x = fmaxf(fabsf(real) - l, 0);
@@ -318,6 +357,22 @@ void collapseAns(float2 *ans)
     }
 }
 
+__global__
+void Y_Update(int m, int n, float2 *x_new, float2 *x_est, float t_new, float t, float2 *y)
+{
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int col = blockIdx.y * blockDim.y + threadIdx.y;
+    for (int i = row; i < m; i += (gridDim.x * blockDim.x))
+    {
+        for (int j = col; j < n; j += (gridDim.y * blockDim.y))
+        {
+            int index = i * n + j;
+            float scale = (t-1.0f) / t_new;
+            y[index] = ComplexAdd(x_new[index], ComplexScale(ComplexSub(x_new[index], x_est[index]), scale));
+        }
+    }
+}
+
 float** read_image(const char* name, int* info, png_bytep other)
 {
     char header[8];
@@ -412,6 +467,33 @@ void write_image(const char *name, png_bytep *image, int width, int height, png_
     fclose(fp);
 }
 
+void write_test_result(int numTests, double *record, char *filename)
+{
+    printf("Creating %s.csv file\n",filename);
+    FILE *fp;
+
+    // printf("Creating filename\n");
+
+    // filename = strcat(filename, ".csv");
+    // filename = strcat("../test/CUDA_Result/", filename);
+
+    printf("Creating file pointer\n");
+    fp = fopen(filename,"w+");
+
+    fprintf(fp,"Num_Iterations, Time(s)\n");
+
+    printf("Starting to write actual file\n");
+
+    for(int i = 0; i < numTests; i++)
+    {
+        fprintf(fp, "%d,%.10g\n", i+1, record[i]);
+    }
+
+    fclose(fp);
+
+    printf("%s.csv file created\n",filename);
+}
+
 void free_image(float **image, int *info, png_bytep other)
 {
     for (int i = 0; i < info[1]; i++)
@@ -444,7 +526,7 @@ void write_back_image(int m, int n, png_bytep *new_image, float2 *signal)
         for (int j = 0; j < n; j++)
         {
             new_image[i][j] = (png_byte)fminf(fabsf(signal[i*n+j].x), 255.0);
-            if (i == m / 2) printf("%d ", new_image[i][j]);
+            // if (i == m / 2) printf("%d ", new_image[i][j]);
         }
     }
 }
@@ -584,7 +666,7 @@ void run_ista(void)
     curandDestroyGenerator(gen);
 }
 
-void run_ista_image(void)
+double* run_ista_image(int numIters)
 {
     float **image;
     float **psf;
@@ -627,10 +709,9 @@ void run_ista_image(void)
     // Copy the image back
     new_image = (png_bytep*) malloc(image_info[1] * sizeof(png_bytep));
     for (int i = 0; i < image_info[1]; i++) new_image[i] = (png_bytep) malloc(image_info[0] * sizeof(png_byte));
-    write_back_image(image_info[1], image_info[0], new_image, signal);
-    cudaDeviceSynchronize();
-    write_image("../test/blurred/blurred3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
-    // cufftExecC2C(plan, filter_shifted, filter_shifted, CUFFT_FORWARD);
+    // write_back_image(image_info[1], image_info[0], new_image, signal);
+    // cudaDeviceSynchronize();
+    // write_image("../test/blurred/blurred3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
     float2 *output;
     int numThreads1 = 64;
     int numBlocks1 = (image_info[0] * image_info[1]) / numThreads1;
@@ -646,15 +727,16 @@ void run_ista_image(void)
     // normalize<<<numBlocks, threads>>>(image_info[1], image_info[0], filter_shifted);
     // cudaDeviceSynchronize();
     cudaFree(output);
-    printf("%f %f\n", max_value, step);
+    // printf("%f %f\n", max_value, step);
     float2 *x_est, *temp;
     cudaMallocManaged(reinterpret_cast<void **>(&x_est), size);
     cudaMallocManaged(reinterpret_cast<void **>(&temp), size);
     cudaMemset(reinterpret_cast<void **>(&x_est), 0, size);
+    double *record = (double *) malloc(numIters * sizeof(double));
     auto runStart = std::chrono::system_clock::now();
-    for (int i = 0; i < num_iters; i++)
+    for (int i = 0; i < numIters; i++)
     {
-        printf("Now doing iteration %d\n", i);
+        // printf("Now doing iteration %d\n", i);
         matrix_copy<<<numBlocks, threads>>>(image_info[1], image_info[0], temp, x_est);
         cudaDeviceSynchronize();
         fourier(plan, image_info[1], image_info[0], x_est, filter_shifted, numBlocks, threads);
@@ -665,10 +747,13 @@ void run_ista_image(void)
         cudaDeviceSynchronize();
         shrink2D<<<numBlocks, threads>>>(image_info[1], image_info[0], x_est, 10 * step);
         cudaDeviceSynchronize();
+        auto currEnd = std::chrono::system_clock::now();
+        std::chrono::duration<double> currDuration = currEnd - runStart;
+        record[i] = currDuration.count();
     }
     auto runEnd = std::chrono::system_clock::now();
     std::chrono::duration<double> runDuration = runEnd - runStart;
-    printf("Program runtime: %.17g second(s)\n", runDuration.count());
+    // printf("Program runtime: %.17g second(s)\n", runDuration.count());
     write_back_image(image_info[1], image_info[0], new_image, x_est);
     cudaDeviceSynchronize();
     write_image("../test/recovered/recovered3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
@@ -681,9 +766,139 @@ void run_ista_image(void)
     cudaFree(filter_shifted);
     cudaFree(filter_reversed);
     cufftDestroy(plan);
+    // sleep(1);
+    return record;
+}
+
+double* run_fista_image(int numIters)
+{
+    float **image;
+    float **psf;
+    png_bytep *new_image;
+    int *image_info, *psf_info;
+    png_bytep other1, other2;
+    image_info = (int*) malloc(2 * sizeof(int));
+    psf_info = (int*) malloc(2 * sizeof(int));
+    other1 = (png_bytep) malloc(2 * sizeof(png_byte));
+    other2 = (png_bytep) malloc(2 * sizeof(png_byte));
+    image = read_image("../image/cameraman.png", image_info, other1);
+    psf = read_image("../psf/psf_gaussian_3.png", psf_info, other2);
+    float2 *signal, *filter, *filter_shifted, *filter_reversed, *y, *draft1;
+    int size = image_info[0] * image_info[1] * sizeof(float2);
+    // The signal (image)
+    cudaMallocManaged(reinterpret_cast<void **>(&signal), size);
+    // The filter (psf)
+    cudaMallocManaged(reinterpret_cast<void **>(&filter), size);
+    // Shifted psf
+    cudaMallocManaged(reinterpret_cast<void **>(&filter_shifted), size);
+    // Used for fourier adjoint
+    cudaMallocManaged(reinterpret_cast<void **>(&filter_reversed), size);
+    // Copy the image over, do the conversion from real to complex at the same time
+    copy_image(image_info[1], image_info[0], image, psf, signal, filter);
+    cudaDeviceSynchronize();
+    dim3 threads(16, 16);
+    dim3 numBlocks(image_info[1] / 16, image_info[0] / 16);
+    circshift<<<numBlocks, threads>>>(image_info[1], image_info[0], filter, filter_shifted);
+    cudaDeviceSynchronize();
+    reverse<<<numBlocks, threads>>>(image_info[1], image_info[0], filter_reversed, filter_shifted);
+    cudaDeviceSynchronize();
+    // Create cufft plan
+    cufftHandle plan;
+    cufftPlan2d(&plan, image_info[0], image_info[1], CUFFT_C2C);
+    // Pre-transform the two filters
+    cufftExecC2C(plan, filter_shifted, filter_shifted, CUFFT_FORWARD);
+    cufftExecC2C(plan, filter_reversed, filter_reversed, CUFFT_FORWARD);
+    // Now blur the image
+    fourier(plan, image_info[1], image_info[0], signal, filter_shifted, numBlocks, threads);
+    // Copy the image back
+    new_image = (png_bytep*) malloc(image_info[1] * sizeof(png_bytep));
+    for (int i = 0; i < image_info[1]; i++) new_image[i] = (png_bytep) malloc(image_info[0] * sizeof(png_byte));
+    // write_back_image(image_info[1], image_info[0], new_image, signal);
+    // cudaDeviceSynchronize();
+    // write_image("../test/blurred/blurred3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
+    float2 *output;
+    int numThreads1 = 64;
+    int numBlocks1 = (image_info[0] * image_info[1]) / numThreads1;
+    cudaMallocManaged(reinterpret_cast<void **>(&output), numBlocks1 * sizeof(float2));
+    reduce<<<numBlocks1, numThreads1, numThreads1*sizeof(float2)>>>(filter_shifted, output);
+    cudaDeviceSynchronize();
+    collapseAns<<<1, numBlocks1>>>(output);
+    cudaDeviceSynchronize();
+    float2 maxComplex = ComplexMul(output[0], output[0]);
+    float max_value = maxComplex.x;
+    float step = 1 / (2 * max_value);
+    float t = 1.0;
+    // cufftExecC2C(plan, filter_shifted, filter_shifted, CUFFT_INVERSE);
+    // normalize<<<numBlocks, threads>>>(image_info[1], image_info[0], filter_shifted);
+    // cudaDeviceSynchronize();
+    cudaFree(output);
+    // printf("%f %f\n", max_value, step);
+    float2 *x_est, *temp;
+    cudaMallocManaged(reinterpret_cast<void **>(&x_est), size);
+    cudaMallocManaged(reinterpret_cast<void **>(&temp), size);
+    // The intermediate value
+    cudaMallocManaged(reinterpret_cast<void **>(&y), size);
+    cudaMallocManaged(reinterpret_cast<void **>(&draft1), size);
+    cudaDeviceSynchronize();
+    cudaMemset(reinterpret_cast<void **>(&x_est), 0, size);
+    cudaMemset(reinterpret_cast<void **>(&y), 0, size);
+    cudaMemset(reinterpret_cast<void **>(&temp), 0, size);
+    cudaMemset(reinterpret_cast<void **>(&draft1), 0, size);
+    cudaDeviceSynchronize();
+    double *record = (double *) malloc(numIters * sizeof(double));
+    auto runStart = std::chrono::system_clock::now();
+    for (int i = 0; i < numIters; i++)
+    {
+        // printf("Now doing iteration %d\n", i);
+        matrix_copy<<<numBlocks, threads>>>(image_info[1], image_info[0], temp, x_est);
+        cudaDeviceSynchronize();
+        matrix_copy<<<numBlocks, threads>>>(image_info[1], image_info[0], draft1, y);
+        cudaDeviceSynchronize();
+        fourier(plan, image_info[1], image_info[0], y, filter_shifted, numBlocks, threads);
+        matrix_minus<<<numBlocks, threads>>>(image_info[1], image_info[0], y, signal);
+        cudaDeviceSynchronize();
+        fourier(plan, image_info[1], image_info[0], y, filter_reversed, numBlocks, threads);
+        modify_fista<<<numBlocks, threads>>>(image_info[1], image_info[0], y, draft1, step);
+        cudaDeviceSynchronize();
+        shrink2D_copy<<<numBlocks, threads>>>(image_info[1], image_info[0], y, x_est, 20 * step);
+        cudaDeviceSynchronize();
+        float t_new = (1 + sqrtf(sqrtf(1 + 4 * t * t))) / 2;
+        Y_Update<<<numBlocks, threads>>>(image_info[1], image_info[0], x_est, temp, t_new, t, y);
+        cudaDeviceSynchronize();
+        t = t_new;
+        auto currEnd = std::chrono::system_clock::now();
+        std::chrono::duration<double> currDuration = currEnd - runStart;
+        record[i] = currDuration.count();
+    }
+    auto runEnd = std::chrono::system_clock::now();
+    std::chrono::duration<double> runDuration = runEnd - runStart;
+    // printf("Program runtime: %.17g second(s)\n", runDuration.count());
+    write_back_image(image_info[1], image_info[0], new_image, x_est);
+    cudaDeviceSynchronize();
+    write_image("../test/recovered/recovered3.png", new_image, image_info[0], image_info[1], other1[0], other1[1]);
+    cufftExecC2C(plan, filter_shifted, filter_shifted, CUFFT_INVERSE);
+    cufftExecC2C(plan, filter_reversed, filter_reversed, CUFFT_INVERSE);
+    free_image(image, image_info, other1);
+    free_image(psf, psf_info, other2);
+    cudaFree(signal);
+    cudaFree(filter);
+    cudaFree(filter_shifted);
+    cudaFree(filter_reversed);
+    cufftDestroy(plan);
+    // sleep(1);
+    return record;
 }
 
 int main(void)
 {
-    run_ista_image();
+    int numTests = 2000;
+    double *record = run_fista_image(numTests);
+    // for (int i = 0; i < numTests; i++)
+    // {
+    //     printf("Test %d\n", i + 1);
+    //     record[i] = run_ista_image(i+1);
+    // }
+    char *filename = "../test/CUDA_Result/FISTA_0_2000_single.csv";
+    write_test_result(numTests, record, filename);
+    free(record);
 }
